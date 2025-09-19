@@ -1,0 +1,25 @@
+{
+  "name": "herbionyx-deployment",
+  "version": "1.0.0",
+  "description": "HerbionYX Smart Contract Deployment Scripts",
+  "main": "deploy.js",
+  "scripts": {
+    "deploy": "node deploy.js",
+    "test": "node test-contract.js",
+    "compile": "node compile.js"
+  },
+  "dependencies": {
+    "ethers": "^6.8.1",
+    "solc": "^0.8.19",
+    "dotenv": "^4.0.0"
+  },
+  "keywords": [
+    "blockchain",
+    "ethereum",
+    "kaleido",
+    "smart-contracts",
+    "deployment"
+  ],
+  "author": "HerbionYX Team",
+  "license": "MIT"
+}

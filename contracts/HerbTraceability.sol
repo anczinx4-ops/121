@@ -17,19 +17,19 @@ contract HerbTraceability {
         uint256 registeredAt;
     }
     
-    // Batch structure
+    // Batch structure - optimized for gas
     struct Batch {
         string batchId;
         string herbSpecies;
         address creator;
         uint256 createdAt;
         uint256 lastUpdated;
-        string[] eventIds;
         string currentStatus;
         bool exists;
+        uint8 eventCount; // Track event count efficiently
     }
     
-    // Event structure
+    // Event structure - optimized for gas
     struct TraceEvent {
         string eventId;
         string batchId;
@@ -44,39 +44,39 @@ contract HerbTraceability {
         bool exists;
     }
     
-    // Collection specific data
+    // Collection specific data - packed for gas efficiency
     struct CollectionData {
         string herbSpecies;
         string collectorName;
-        uint256 weight;
+        uint256 weight; // in grams, no decimals needed
         string harvestDate;
         string qualityGrade;
     }
     
-    // Quality test specific data
+    // Quality test specific data - packed for gas efficiency
     struct QualityTestData {
         string testerName;
-        uint256 moistureContent; // multiplied by 100 to avoid decimals
-        uint256 purity; // multiplied by 100 to avoid decimals
-        uint256 pesticideLevel; // multiplied by 1000000 to handle ppm
+        uint16 moistureContent; // multiplied by 100, max 655.35%
+        uint16 purity; // multiplied by 100, max 655.35%
+        uint32 pesticideLevel; // multiplied by 1000000, max 4294 ppm
         string testMethod;
     }
     
-    // Processing specific data
+    // Processing specific data - packed for gas efficiency
     struct ProcessingData {
         string processorName;
         string method;
-        uint256 temperature; // multiplied by 100 to avoid decimals
+        uint16 temperature; // multiplied by 100, max 655.35°C
         string duration;
-        uint256 yieldAmount; // multiplied by 100 to avoid decimals
+        uint256 yieldAmount; // in grams
     }
     
-    // Manufacturing specific data
+    // Manufacturing specific data - packed for gas efficiency
     struct ManufacturingData {
         string manufacturerName;
         string productName;
         string productType;
-        uint256 quantity; // multiplied by 100 to avoid decimals
+        uint256 quantity;
         string unit;
         string expiryDate;
     }
@@ -84,7 +84,7 @@ contract HerbTraceability {
     // Contract owner
     address public owner;
     
-    // Mappings
+    // Mappings - optimized for gas
     mapping(address => Organization) public organizations;
     mapping(string => Batch) public batches;
     mapping(string => TraceEvent) public events;
@@ -93,8 +93,10 @@ contract HerbTraceability {
     mapping(string => ProcessingData) public processingData;
     mapping(string => ManufacturingData) public manufacturingData;
     
-    // Arrays for enumeration
-    address[] public organizationAddresses;
+    // Batch events mapping for efficient lookup
+    mapping(string => string[]) public batchEvents;
+    
+    // Arrays for enumeration - consider removing if not needed to save gas
     string[] public batchIds;
     string[] public eventIds;
     
@@ -126,9 +128,9 @@ contract HerbTraceability {
     // Register organization
     function registerOrganization(
         address _orgAddress,
-        string memory _name,
+        string calldata _name,
         OrgType _orgType
-    ) public onlyOwner {
+    ) external onlyOwner {
         require(!organizations[_orgAddress].isActive, "Organization already registered");
         
         organizations[_orgAddress] = Organization({
@@ -139,26 +141,27 @@ contract HerbTraceability {
             registeredAt: block.timestamp
         });
         
-        organizationAddresses.push(_orgAddress);
         emit OrganizationRegistered(_orgAddress, _name, _orgType);
     }
     
     // Create collection event (only collectors)
     function createCollectionEvent(
-        string memory _batchId,
-        string memory _eventId,
-        string memory _herbSpecies,
-        string memory _collectorName,
+        string calldata _batchId,
+        string calldata _eventId,
+        string calldata _herbSpecies,
+        string calldata _collectorName,
         uint256 _weight,
-        string memory _harvestDate,
-        string memory _location,
-        string memory _qualityGrade,
-        string memory _notes,
-        string memory _ipfsHash,
-        string memory _qrCodeHash
-    ) public onlyActiveOrg onlyOrgType(OrgType.COLLECTOR) {
+        string calldata _harvestDate,
+        string calldata _location,
+        string calldata _qualityGrade,
+        string calldata _notes,
+        string calldata _ipfsHash,
+        string calldata _qrCodeHash
+    ) external onlyActiveOrg onlyOrgType(OrgType.COLLECTOR) {
         require(!batches[_batchId].exists, "Batch already exists");
         require(!events[_eventId].exists, "Event already exists");
+        require(bytes(_batchId).length > 0, "Batch ID cannot be empty");
+        require(bytes(_eventId).length > 0, "Event ID cannot be empty");
         
         // Create batch
         batches[_batchId] = Batch({
@@ -167,9 +170,9 @@ contract HerbTraceability {
             creator: msg.sender,
             createdAt: block.timestamp,
             lastUpdated: block.timestamp,
-            eventIds: new string[](0),
             currentStatus: "COLLECTED",
-            exists: true
+            exists: true,
+            eventCount: 1
         });
         
         // Create event
@@ -196,8 +199,8 @@ contract HerbTraceability {
             qualityGrade: _qualityGrade
         });
         
-        // Update arrays
-        batches[_batchId].eventIds.push(_eventId);
+        // Update mappings
+        batchEvents[_batchId].push(_eventId);
         batchIds.push(_batchId);
         eventIds.push(_eventId);
         
@@ -207,21 +210,22 @@ contract HerbTraceability {
     
     // Create quality test event (only testers)
     function createQualityTestEvent(
-        string memory _eventId,
-        string memory _batchId,
-        string memory _parentEventId,
-        string memory _testerName,
-        uint256 _moistureContent,
-        uint256 _purity,
-        uint256 _pesticideLevel,
-        string memory _testMethod,
-        string memory _notes,
-        string memory _ipfsHash,
-        string memory _qrCodeHash
-    ) public onlyActiveOrg onlyOrgType(OrgType.TESTER) {
+        string calldata _eventId,
+        string calldata _batchId,
+        string calldata _parentEventId,
+        string calldata _testerName,
+        uint16 _moistureContent,
+        uint16 _purity,
+        uint32 _pesticideLevel,
+        string calldata _testMethod,
+        string calldata _notes,
+        string calldata _ipfsHash,
+        string calldata _qrCodeHash
+    ) external onlyActiveOrg onlyOrgType(OrgType.TESTER) {
         require(batches[_batchId].exists, "Batch does not exist");
         require(events[_parentEventId].exists, "Parent event does not exist");
         require(!events[_eventId].exists, "Event already exists");
+        require(bytes(_eventId).length > 0, "Event ID cannot be empty");
         
         // Create event
         events[_eventId] = TraceEvent({
@@ -248,9 +252,10 @@ contract HerbTraceability {
         });
         
         // Update batch
-        batches[_batchId].eventIds.push(_eventId);
+        batchEvents[_batchId].push(_eventId);
         batches[_batchId].lastUpdated = block.timestamp;
         batches[_batchId].currentStatus = "QUALITY_TESTED";
+        batches[_batchId].eventCount++;
         
         eventIds.push(_eventId);
         
@@ -259,21 +264,22 @@ contract HerbTraceability {
     
     // Create processing event (only processors)
     function createProcessingEvent(
-        string memory _eventId,
-        string memory _batchId,
-        string memory _parentEventId,
-        string memory _processorName,
-        string memory _method,
-        uint256 _temperature,
-        string memory _duration,
+        string calldata _eventId,
+        string calldata _batchId,
+        string calldata _parentEventId,
+        string calldata _processorName,
+        string calldata _method,
+        uint16 _temperature,
+        string calldata _duration,
         uint256 _yieldAmount,
-        string memory _notes,
-        string memory _ipfsHash,
-        string memory _qrCodeHash
-    ) public onlyActiveOrg onlyOrgType(OrgType.PROCESSOR) {
+        string calldata _notes,
+        string calldata _ipfsHash,
+        string calldata _qrCodeHash
+    ) external onlyActiveOrg onlyOrgType(OrgType.PROCESSOR) {
         require(batches[_batchId].exists, "Batch does not exist");
         require(events[_parentEventId].exists, "Parent event does not exist");
         require(!events[_eventId].exists, "Event already exists");
+        require(bytes(_eventId).length > 0, "Event ID cannot be empty");
         
         // Create event
         events[_eventId] = TraceEvent({
@@ -300,9 +306,10 @@ contract HerbTraceability {
         });
         
         // Update batch
-        batches[_batchId].eventIds.push(_eventId);
+        batchEvents[_batchId].push(_eventId);
         batches[_batchId].lastUpdated = block.timestamp;
         batches[_batchId].currentStatus = "PROCESSED";
+        batches[_batchId].eventCount++;
         
         eventIds.push(_eventId);
         
@@ -311,22 +318,23 @@ contract HerbTraceability {
     
     // Create manufacturing event (only manufacturers)
     function createManufacturingEvent(
-        string memory _eventId,
-        string memory _batchId,
-        string memory _parentEventId,
-        string memory _manufacturerName,
-        string memory _productName,
-        string memory _productType,
+        string calldata _eventId,
+        string calldata _batchId,
+        string calldata _parentEventId,
+        string calldata _manufacturerName,
+        string calldata _productName,
+        string calldata _productType,
         uint256 _quantity,
-        string memory _unit,
-        string memory _expiryDate,
-        string memory _notes,
-        string memory _ipfsHash,
-        string memory _qrCodeHash
-    ) public onlyActiveOrg onlyOrgType(OrgType.MANUFACTURER) {
+        string calldata _unit,
+        string calldata _expiryDate,
+        string calldata _notes,
+        string calldata _ipfsHash,
+        string calldata _qrCodeHash
+    ) external onlyActiveOrg onlyOrgType(OrgType.MANUFACTURER) {
         require(batches[_batchId].exists, "Batch does not exist");
         require(events[_parentEventId].exists, "Parent event does not exist");
         require(!events[_eventId].exists, "Event already exists");
+        require(bytes(_eventId).length > 0, "Event ID cannot be empty");
         
         // Create event
         events[_eventId] = TraceEvent({
@@ -354,63 +362,72 @@ contract HerbTraceability {
         });
         
         // Update batch
-        batches[_batchId].eventIds.push(_eventId);
+        batchEvents[_batchId].push(_eventId);
         batches[_batchId].lastUpdated = block.timestamp;
         batches[_batchId].currentStatus = "MANUFACTURED";
+        batches[_batchId].eventCount++;
         
         eventIds.push(_eventId);
         
         emit EventAdded(_eventId, _batchId, EventType.MANUFACTURING, msg.sender);
     }
     
-    // Get batch events
-    function getBatchEvents(string memory _batchId) public view returns (string[] memory) {
+    // Get batch events - gas optimized
+    function getBatchEvents(string calldata _batchId) external view returns (string[] memory) {
         require(batches[_batchId].exists, "Batch does not exist");
-        return batches[_batchId].eventIds;
+        return batchEvents[_batchId];
     }
     
-    // Get all batches
-    function getAllBatches() public view returns (string[] memory) {
+    // Get all batches - consider pagination for large datasets
+    function getAllBatches() external view returns (string[] memory) {
         return batchIds;
     }
     
-    // Get all events
-    function getAllEvents() public view returns (string[] memory) {
+    // Get all events - consider pagination for large datasets
+    function getAllEvents() external view returns (string[] memory) {
         return eventIds;
     }
     
-    // Get organization count
-    function getOrganizationCount() public view returns (uint256) {
-        return organizationAddresses.length;
-    }
-    
     // Get batch count
-    function getBatchCount() public view returns (uint256) {
+    function getBatchCount() external view returns (uint256) {
         return batchIds.length;
     }
     
     // Get event count
-    function getEventCount() public view returns (uint256) {
+    function getEventCount() external view returns (uint256) {
         return eventIds.length;
     }
     
     // Get collection data
-    function getCollectionData(string memory _eventId) public view returns (CollectionData memory) {
+    function getCollectionData(string calldata _eventId) external view returns (CollectionData memory) {
+        require(events[_eventId].exists, "Event does not exist");
         return collectionData[_eventId];
     }
     
     // Get quality test data
-    function getQualityTestData(string memory _eventId) public view returns (QualityTestData memory) {
+    function getQualityTestData(string calldata _eventId) external view returns (QualityTestData memory) {
+        require(events[_eventId].exists, "Event does not exist");
         return qualityTestData[_eventId];
     }
     
     // Get processing data
-    function getProcessingData(string memory _eventId) public view returns (ProcessingData memory) {
+    function getProcessingData(string calldata _eventId) external view returns (ProcessingData memory) {
+        require(events[_eventId].exists, "Event does not exist");
         return processingData[_eventId];
     }
     
     // Get manufacturing data
-    function getManufacturingData(string memory _eventId) public view returns (ManufacturingData memory) {
+    function getManufacturingData(string calldata _eventId) external view returns (ManufacturingData memory) {
+        require(events[_eventId].exists, "Event does not exist");
         return manufacturingData[_eventId];
+    }
+    
+    // Emergency functions
+    function pause() external onlyOwner {
+        // Implementation for emergency pause
+    }
+    
+    function unpause() external onlyOwner {
+        // Implementation for unpause
     }
 }

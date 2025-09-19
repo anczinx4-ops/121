@@ -77,21 +77,28 @@ class KaleidoService {
     }
     
     getContractABI() {
-        // Minimal ABI for the contract - will be replaced when contract is deployed
-        return [
-            "function createCollectionEvent(string,string,string,string,uint256,string,string,string,string,string,string) external",
-            "function createQualityTestEvent(string,string,string,string,uint256,uint256,uint256,string,string,string,string) external",
-            "function createProcessingEvent(string,string,string,string,string,uint256,string,uint256,string,string,string) external",
-            "function createManufacturingEvent(string,string,string,string,string,string,uint256,string,string,string,string,string) external",
-            "function getBatchEvents(string) view returns (string[])",
-            "function getAllBatches() view returns (string[])",
-            "function getAllEvents() view returns (string[])",
-            "function batches(string) view returns (tuple(string,string,address,uint256,uint256,string[],string,bool))",
-            "function events(string) view returns (tuple(string,string,string,uint8,address,uint256,string,string,string,string,bool))",
-            "function organizations(address) view returns (tuple(string,uint8,address,bool,uint256))",
-            "event BatchCreated(string indexed batchId, string herbSpecies, address indexed creator)",
-            "event EventAdded(string indexed eventId, string indexed batchId, uint8 eventType, address indexed participant)"
-        ];
+        // Load ABI from deployed contract
+        try {
+            const contractData = require('../contracts/HerbTraceability.json');
+            return contractData.abi;
+        } catch (error) {
+            console.error('Could not load contract ABI:', error);
+            // Fallback minimal ABI
+            return [
+                "function createCollectionEvent(string,string,string,string,uint256,string,string,string,string,string,string) external",
+                "function createQualityTestEvent(string,string,string,string,uint16,uint16,uint32,string,string,string,string) external",
+                "function createProcessingEvent(string,string,string,string,string,uint16,string,uint256,string,string,string) external",
+                "function createManufacturingEvent(string,string,string,string,string,string,uint256,string,string,string,string,string) external",
+                "function getBatchEvents(string) view returns (string[])",
+                "function getAllBatches() view returns (string[])",
+                "function getAllEvents() view returns (string[])",
+                "function batches(string) view returns (tuple(string,string,address,uint256,uint256,string,bool,uint8))",
+                "function events(string) view returns (tuple(string,string,string,uint8,address,uint256,string,string,string,string,bool))",
+                "function organizations(address) view returns (tuple(string,uint8,address,bool,uint256))",
+                "event BatchCreated(string indexed batchId, string herbSpecies, address indexed creator)",
+                "event EventAdded(string indexed eventId, string indexed batchId, uint8 eventType, address indexed participant)"
+            ];
+        }
     }
     
     async deployContract() {
@@ -224,9 +231,9 @@ class KaleidoService {
                 eventData.batchId,
                 eventData.parentEventId,
                 eventData.testerName,
-                Math.floor(eventData.moistureContent * 100), // Convert to integer
-                Math.floor(eventData.purity * 100), // Convert to integer
-                Math.floor(eventData.pesticideLevel * 1000000), // Convert ppm to integer
+                Math.min(Math.floor(eventData.moistureContent * 100), 65535), // uint16 max
+                Math.min(Math.floor(eventData.purity * 100), 65535), // uint16 max
+                Math.min(Math.floor(eventData.pesticideLevel * 1000000), 4294967295), // uint32 max
                 eventData.testMethod || 'Standard Test',
                 eventData.notes || '',
                 eventData.ipfsHash || '',
@@ -262,9 +269,9 @@ class KaleidoService {
                 eventData.parentEventId,
                 eventData.processorName,
                 eventData.method,
-                Math.floor((eventData.temperature || 0) * 100), // Convert to integer
+                Math.min(Math.floor((eventData.temperature || 0) * 100), 65535), // uint16 max
                 eventData.duration || '',
-                Math.floor(eventData.yield * 100), // Convert to integer
+                eventData.yield || 0, // Keep as uint256 for yield amount
                 eventData.notes || '',
                 eventData.ipfsHash || '',
                 eventData.qrCodeHash || ''
@@ -300,7 +307,7 @@ class KaleidoService {
                 eventData.manufacturerName,
                 eventData.productName,
                 eventData.productType || 'Herbal Product',
-                Math.floor(eventData.quantity * 100), // Convert to integer
+                eventData.quantity || 0, // Keep as uint256 for quantity
                 eventData.unit || 'units',
                 eventData.expiryDate || '',
                 eventData.notes || '',
