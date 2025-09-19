@@ -8,7 +8,8 @@ class KaleidoService {
         this.apiUrl = process.env.KALEIDO_API_URL;
         this.apiKey = process.env.KALEIDO_API_KEY;
         this.signingKey = process.env.KALEIDO_SIGNING_KEY;
-        this.contractAddress = process.env.CONTRACT_ADDRESS;
+        this.coreContractAddress = process.env.CORE_CONTRACT_ADDRESS;
+        this.storageContractAddress = process.env.STORAGE_CONTRACT_ADDRESS;
         
         // Organization addresses and private keys
         this.organizations = {
@@ -31,7 +32,8 @@ class KaleidoService {
         };
         
         this.provider = null;
-        this.contract = null;
+        this.coreContract = null;
+        this.storageContract = null;
         this.wallets = {};
         
         this.initializeProvider();
@@ -46,20 +48,33 @@ class KaleidoService {
             });
             
             // Load contract ABI
-            const abiPath = path.join(__dirname, '../contracts/HerbTraceability.json');
+            const coreAbiPath = path.join(__dirname, '../contracts/HerbTraceabilityCore.json');
+            const storageAbiPath = path.join(__dirname, '../contracts/HerbTraceabilityStorage.json');
             let contractABI;
+            let storageABI;
             
-            if (fs.existsSync(abiPath)) {
-                const contractData = JSON.parse(fs.readFileSync(abiPath, 'utf8'));
+            if (fs.existsSync(coreAbiPath)) {
+                const contractData = JSON.parse(fs.readFileSync(coreAbiPath, 'utf8'));
                 contractABI = contractData.abi || contractData;
             } else {
                 // Fallback ABI if file doesn't exist
-                contractABI = this.getContractABI();
+                contractABI = this.getCoreContractABI();
+            }
+            
+            if (fs.existsSync(storageAbiPath)) {
+                const storageData = JSON.parse(fs.readFileSync(storageAbiPath, 'utf8'));
+                storageABI = storageData.abi || storageData;
+            } else {
+                storageABI = this.getStorageContractABI();
             }
             
             // Create contract instance
-            if (this.contractAddress && this.contractAddress !== '0x0000000000000000000000000000000000000000') {
-                this.contract = new ethers.Contract(this.contractAddress, contractABI, this.provider);
+            if (this.coreContractAddress && this.coreContractAddress !== '0x0000000000000000000000000000000000000000') {
+                this.coreContract = new ethers.Contract(this.coreContractAddress, contractABI, this.provider);
+            }
+            
+            if (this.storageContractAddress && this.storageContractAddress !== '0x0000000000000000000000000000000000000000') {
+                this.storageContract = new ethers.Contract(this.storageContractAddress, storageABI, this.provider);
             }
             
             // Initialize wallets for each organization
@@ -76,13 +91,13 @@ class KaleidoService {
         }
     }
     
-    getContractABI() {
+    getCoreContractABI() {
         // Load ABI from deployed contract
         try {
-            const contractData = require('../contracts/HerbTraceability.json');
+            const contractData = require('../contracts/HerbTraceabilityCore.json');
             return contractData.abi;
         } catch (error) {
-            console.error('Could not load contract ABI:', error);
+            console.error('Could not load core contract ABI:', error);
             // Fallback minimal ABI
             return [
                 "function createCollectionEvent(string,string,string,string,uint256,string,string,string,string,string,string) external",
@@ -92,11 +107,27 @@ class KaleidoService {
                 "function getBatchEvents(string) view returns (string[])",
                 "function getAllBatches() view returns (string[])",
                 "function getAllEvents() view returns (string[])",
-                "function batches(string) view returns (tuple(string,string,address,uint256,uint256,string,bool,uint8))",
+                "function getBatchCount() view returns (uint256)",
+                "function getEventCount() view returns (uint256)",
+                "event BatchCreated(string indexed batchId, string herbSpecies, address indexed creator)",
+                "event EventAdded(string indexed eventId, string indexed batchId, uint8 eventType, address indexed participant)",
+                "function registerOrganization(address,string,uint8) external"
+            ];
+        }
+    }
+    
+    getStorageContractABI() {
+        try {
+            const storageData = require('../contracts/HerbTraceabilityStorage.json');
+            return storageData.abi;
+        } catch (error) {
+            console.error('Could not load storage contract ABI:', error);
+            return [
+                "function batches(string) view returns (tuple(string,string,address,uint256,uint256,string,bool))",
                 "function events(string) view returns (tuple(string,string,string,uint8,address,uint256,string,string,string,string,bool))",
                 "function organizations(address) view returns (tuple(string,uint8,address,bool,uint256))",
-                "event BatchCreated(string indexed batchId, string herbSpecies, address indexed creator)",
-                "event EventAdded(string indexed eventId, string indexed batchId, uint8 eventType, address indexed participant)"
+                "function setCoreContract(address) external",
+                "function owner() view returns (address)"
             ];
         }
     }
@@ -108,29 +139,55 @@ class KaleidoService {
             }
             
             // Contract bytecode (this would be generated from Remix)
-            const contractBytecode = "0x608060405234801561001057600080fd5b50..."; // This will be replaced with actual bytecode
+            const storageBytecode = "0x608060405234801561001057600080fd5b50..."; // Storage contract bytecode
+            const coreBytecode = "0x608060405234801561001057600080fd5b50..."; // Core contract bytecode
             
-            const contractFactory = new ethers.ContractFactory(
-                this.getContractABI(),
-                contractBytecode,
+            // Deploy storage contract first
+            const storageFactory = new ethers.ContractFactory(
+                this.getStorageContractABI(),
+                storageBytecode,
                 this.wallets.COLLECTOR
             );
             
-            console.log('Deploying contract...');
-            const contract = await contractFactory.deploy();
-            await contract.waitForDeployment();
+            console.log('Deploying storage contract...');
+            const storageContract = await storageFactory.deploy();
+            await storageContract.waitForDeployment();
             
-            const contractAddress = await contract.getAddress();
-            console.log('✅ Contract deployed at:', contractAddress);
+            const storageAddress = await storageContract.getAddress();
+            console.log('✅ Storage contract deployed at:', storageAddress);
             
-            // Update contract address in environment
-            this.contractAddress = contractAddress;
-            this.contract = contract;
+            // Deploy core contract with storage address
+            const coreFactory = new ethers.ContractFactory(
+                this.getCoreContractABI(),
+                coreBytecode,
+                this.wallets.COLLECTOR
+            );
+            
+            console.log('Deploying core contract...');
+            const coreContract = await coreFactory.deploy(storageAddress);
+            await coreContract.waitForDeployment();
+            
+            const coreAddress = await coreContract.getAddress();
+            console.log('✅ Core contract deployed at:', coreAddress);
+            
+            // Link contracts
+            console.log('Linking contracts...');
+            const linkTx = await storageContract.setCoreContract(coreAddress);
+            await linkTx.wait();
+            console.log('✅ Contracts linked successfully');
+            
+            // Update contract addresses
+            this.coreContractAddress = coreAddress;
+            this.storageContractAddress = storageAddress;
+            this.coreContract = coreContract;
+            this.storageContract = storageContract;
             
             return {
                 success: true,
-                contractAddress,
-                transactionHash: contract.deploymentTransaction().hash
+                coreContractAddress: coreAddress,
+                storageContractAddress: storageAddress,
+                coreTransactionHash: coreContract.deploymentTransaction().hash,
+                storageTransactionHash: storageContract.deploymentTransaction().hash
             };
         } catch (error) {
             console.error('❌ Contract deployment failed:', error);
@@ -140,11 +197,11 @@ class KaleidoService {
     
     async registerOrganizations() {
         try {
-            if (!this.contract || !this.wallets.COLLECTOR) {
+            if (!this.coreContract || !this.wallets.COLLECTOR) {
                 throw new Error('Contract or wallet not initialized');
             }
             
-            const contractWithSigner = this.contract.connect(this.wallets.COLLECTOR);
+            const contractWithSigner = this.coreContract.connect(this.wallets.COLLECTOR);
             
             const orgTypes = ['COLLECTOR', 'TESTER', 'PROCESSOR', 'MANUFACTURER'];
             const results = [];
@@ -187,7 +244,7 @@ class KaleidoService {
                 throw new Error(`Wallet for ${orgType} not found`);
             }
             
-            const contractWithSigner = this.contract.connect(wallet);
+            const contractWithSigner = this.coreContract.connect(wallet);
             
             const tx = await contractWithSigner.createCollectionEvent(
                 eventData.batchId,
@@ -224,7 +281,7 @@ class KaleidoService {
                 throw new Error(`Wallet for ${orgType} not found`);
             }
             
-            const contractWithSigner = this.contract.connect(wallet);
+            const contractWithSigner = this.coreContract.connect(wallet);
             
             const tx = await contractWithSigner.createQualityTestEvent(
                 eventData.eventId,
@@ -261,7 +318,7 @@ class KaleidoService {
                 throw new Error(`Wallet for ${orgType} not found`);
             }
             
-            const contractWithSigner = this.contract.connect(wallet);
+            const contractWithSigner = this.coreContract.connect(wallet);
             
             const tx = await contractWithSigner.createProcessingEvent(
                 eventData.eventId,
@@ -298,7 +355,7 @@ class KaleidoService {
                 throw new Error(`Wallet for ${orgType} not found`);
             }
             
-            const contractWithSigner = this.contract.connect(wallet);
+            const contractWithSigner = this.coreContract.connect(wallet);
             
             const tx = await contractWithSigner.createManufacturingEvent(
                 eventData.eventId,
@@ -331,15 +388,15 @@ class KaleidoService {
     
     async getBatchEvents(batchId) {
         try {
-            if (!this.contract) {
+            if (!this.coreContract) {
                 throw new Error('Contract not initialized');
             }
             
-            const eventIds = await this.contract.getBatchEvents(batchId);
+            const eventIds = await this.coreContract.getBatchEvents(batchId);
             const events = [];
             
             for (const eventId of eventIds) {
-                const event = await this.contract.events(eventId);
+                const event = await this.storageContract.events(eventId);
                 if (event.exists) {
                     events.push({
                         eventId: event.eventId,
@@ -365,15 +422,15 @@ class KaleidoService {
     
     async getAllBatches() {
         try {
-            if (!this.contract) {
+            if (!this.coreContract) {
                 throw new Error('Contract not initialized');
             }
             
-            const batchIds = await this.contract.getAllBatches();
+            const batchIds = await this.coreContract.getAllBatches();
             const batches = [];
             
             for (const batchId of batchIds) {
-                const batch = await this.contract.batches(batchId);
+                const batch = await this.storageContract.batches(batchId);
                 if (batch.exists) {
                     batches.push({
                         batchId: batch.batchId,
@@ -381,7 +438,6 @@ class KaleidoService {
                         creator: batch.creator,
                         createdAt: Number(batch.createdAt),
                         lastUpdated: Number(batch.lastUpdated),
-                        eventIds: batch.eventIds,
                         currentStatus: batch.currentStatus
                     });
                 }
@@ -396,13 +452,13 @@ class KaleidoService {
     
     async getAllTransactions() {
         try {
-            if (!this.contract) {
+            if (!this.coreContract) {
                 throw new Error('Contract not initialized');
             }
             
             // Get all events from the contract
-            const filter = this.contract.filters.EventAdded();
-            const events = await this.contract.queryFilter(filter);
+            const filter = this.coreContract.filters.EventAdded();
+            const events = await this.coreContract.queryFilter(filter);
             
             const transactions = events.map(event => ({
                 transactionHash: event.transactionHash,
