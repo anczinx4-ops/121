@@ -226,4 +226,17 @@ const Dashboard: React.FC = () => {
                   </div>
                   <div className="text-xs text-gray-400">
                     {tx.participant.substring(0, 6)}...{tx.participant.substring(tx.participant.length - 4)}
-                  
+                  </div>
+                </div>
+              </div>
+            ))
+          ) : (
+            <div className="text-center py-8 text-gray-500">
+              No transactions found
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
